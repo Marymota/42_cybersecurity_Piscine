@@ -1,30 +1,11 @@
 <?php
 
 require __DIR__ . '/utils/settings.php';
+require __DIR__ . '/utils/request.php';
+require __DIR__ . '/utils/printASCII.php';
 
-$spider = [
- "        (                                                                                 ",
- "         )                                                                                ",                                                                     
- "        (                                                                                 ",
- "  /\\ .-\"\"\"-.  /\\                                                                     ",
- "  //\\/  ,,,  \//\\             __________________________________________________        ",
- "  |/\| ,;;;;;, |/\|         / SSSSS  / PPPPPP  / III  / DDDD   / EEEEE  / RRRRR\          ",
- "  //\\\;-\"\"\"-;///\\          | S    /  | P  / P   | I   | D_/ D  | E      | R  / R     ",
- " //  \/   .   \/  \\         \ SSSS   | PPPPPP   | I   | D | D  | EEEE   | RRRRR          ",
- "(| ,-_| \ | / |_-, |)       /   / S  ! P____/   ! I   ! D ! D  ! E      | R \ R           ",
- "  //`__\.-.-./__`\\         | SSSSS   | P       / III  | DDDD/  | EEEEE  | R  \ R         ",
- " //    /   .   \    \      /_____/   |_/       |___/  |____/   |_____/  |_/  |_/          ",
- "(|   /   /   \   \   |)    ------------------------------------------------------         ",
- "  \\  \  /   \  /  //         -----------------------------------------------------       ",
- "   \\  \'-     -\'/  //          ---------------------------------------------------      ",
- "    \\_/         \_//                -------------------------------------------------    ",
- "",
-];
-
-// Loop through the spider array and echo each line
-foreach ($spider as $line) {
-    echo $line . "\n";
-}
+// Call function
+spider($argc, $argv);
 
 function spider($argc, $argv) {
 
@@ -38,31 +19,7 @@ function spider($argc, $argv) {
     $sets = settings($argc, $argv);
     $url = isset($sets['url']) ? $sets['url'] : exit ("No URL defined\n");
 
-    // $url = "https://scrapingcourse.com/ecommerce/";
-    $index = 0;
-
-    echo "Scrapping page: $url\n";
-
-    // Retrieve the HTML from page
-    /* (cURL) libcurl - Allows connection and communication with many different types of servers and protocols.
-        -> https:www/php.net/manual/en/intro.curl.php */
-    
-    $request = curl_init();                                // Initiate a cURL session (install php-curl)
-    curl_setopt($request, CURLOPT_URL, $url);              // set the website URL
-    curl_setopt($request, CURLOPT_RETURNTRANSFER, true);   // return the response as a string
-    curl_setopt($request, CURLOPT_FOLLOWLOCATION, true);   // follow redirects
-    curl_setopt($request, CURLOPT_SSL_VERIFYPEER, false);  // ignore SSL verification
-    $response = curl_exec($request);                       // execute the CURL session
-
-    if ($response === false) {                             // check for errors
-        $error = curl_error($request);
-        echo "cURL error: " . $error . "\n";
-        exit;
-    }
-    // print the HTML content
-    //echo $response;
-    // close cURL session
-    curl_close($request);
+    $response = curl_request($url);
 
     //  Parse HTML 
     $document = new DOMDocument();          // install php-xml
@@ -72,69 +29,65 @@ function spider($argc, $argv) {
         libxml_clear_errors();              //  Clear libxml error buffer
     }
 
+    crawl($url, $document, $sets, $sets['level']);
+
+}
+
+function crawl ($url, $document, $sets, $level) {
+    // $url = "https://scrapingcourse.com/ecommerce/";
+    $index = 0;
+
+    echo "Scrapping page: $url\n";
+
+    // Retrieve the HTML from page
+    /* (cURL) libcurl - Allows connection and communication with many different types of servers and protocols.
+        -> https:www/php.net/manual/en/intro.curl.php */
+
     // Get image Links
-    $images = array();
-
-    foreach($document->getElementsByTagName('img') as $img) {
-        $image = array (
-            $src = $img->getAttribute('src')
-        );
-        
-        // Skip images without src
-        if (!$src) {
-            continue;
-        }
-
-        //  Add to collection to avoid repetition
-        $images[$src] = $src;
-    }
+    $images = tagsFinder($document, "img");
     $images = array_values($images);
 
     for ($i = 0; $i < sizeof($images); $i++) {
+        // If the URL is relative, make it absolute
+        if (!filter_var($images[$i], FILTER_VALIDATE_URL)) {
+            $images[$i] = rtrim($url, '/') . '/' . ltrim($images[$i], '/');
+        }
 
         // Get images data
-        $data = get_images($images[$i]);
+        $data = curl_request($images[$i]);
 
         // Create directory for downloads
-        $dir = "./data";
-        if(!is_dir($dir)) mkdir($dir);
-        file_put_contents("$dir/image_$i", $data);
-        echo "$i spider... \n";
+        $path = $sets['path'];
+        if (!is_dir($path)) {
+            mkdir($path, 0777, true);
+        }
+        file_put_contents("$path/image_$level" . "_$i", $data);
+        echo "$i crawl level $level...\n";
     }
-    echo "\n";
+
+    // Recursively crawl links
+    if ($sets['recursive'] && $level > 0) {
+        $links = tagsFinder($document, 'a');
+        $links = array_values($links);
+
+        foreach ($links as $link) {
+            if (filter_var($link, FILTER_VALIDATE_URL)) {
+                $response = curl_request($link);
+                $document = new DOMDocument();
+                libxml_use_internal_errors(true);
+                $document->loadHTML($response);
+                libxml_clear_errors();
+            
+                // Recursively crawl next level
+                if ($level - 1 > 0)
+                    crawl($link, $document, $sets, $level - 1);
+                else
+                    break;
+            }
+        }
+    }   
 }
-
-// Call function
-spider($argc, $argv);
-
-
-function get_images($url) {
-    $request = curl_init();
-
-    curl_setopt($request, CURLOPT_URL, $url);              // set the website URL
-    curl_setopt($request, CURLOPT_RETURNTRANSFER, true);   // return the response as a string
-    curl_setopt($request, CURLOPT_HEADER, 0);               // follow redirects
-
-    $data = curl_exec($request);
-    curl_close($request);
-
-    return $data;
-}
-
-
-
-//  Web crawling -> following more pages by links
-//  check if there is a next page
-//  $link =$html->find("a", 0);
-//  if($link) {
-//      $nextPageUrl = $link->href;
-//  }
-//  spider($nextPageUrl);
-
-//  call the start function
-//  spider($url):
-
-
+ 
 
 
 
